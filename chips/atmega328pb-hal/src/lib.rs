@@ -37,19 +37,19 @@ pub mod i2c {
                 scl: portc::PC5,
             },
             registers: {
-                control: twcr {
+                control: twcr0 {
                     enable: twen,
                     ack: twea,
                     int: twint,
                     start: twsta,
                     stop: twsto,
                 },
-                status: twsr {
+                status: twsr0 {
                     prescaler: twps,
                     status: tws,
                 },
-                bitrate: twbr,
-                data: twdr,
+                bitrate: twbr0,
+                data: twdr0,
             },
         }
     }
@@ -63,19 +63,19 @@ pub mod i2c {
                 scl: porte::PE1,
             },
             registers: {
-                control: twcr {
-                    enable: twen,
-                    ack: twea,
-                    int: twint,
-                    start: twsta,
-                    stop: twsto,
+                control: twcr1 {
+                    enable: twen1,
+                    ack: twea1,
+                    int: twint1,
+                    start: twsta1,
+                    stop: twsto1,
                 },
-                status: twsr {
-                    prescaler: twps,
-                    status: tws,
+                status: twsr1 {
+                    prescaler: twps1,
+                    status: tws1,
                 },
-                bitrate: twbr,
-                data: twdr,
+                bitrate: twbr1,
+                data: twdr1,
             },
         }
     }
@@ -120,7 +120,6 @@ pub mod spi0 {
             }
         }
     }
-
 }
 
 pub mod spi1 {
@@ -137,12 +136,11 @@ pub mod spi1 {
             }
         }
     }
-
 }
 
 /// Serial interface using USART
 pub mod usart {
-    use crate::port::portd;
+    use crate::port::{portb, portd};
     pub use avr_hal::serial::*;
 
     crate::avr_hal::impl_usart! {
@@ -158,4 +156,19 @@ pub mod usart {
             register_suffix: 0,
         }
     }
+
+    crate::avr_hal::impl_usart! {
+        /// Serial interface based on ATmega328PB's USART1 peripheral
+        ///
+        /// Maximum baudrate seems to be 57600
+        pub struct Usart1 {
+            peripheral: crate::mcu::USART1,
+            pins: {
+                rx: portb::PB3,
+                tx: portb::PB4,
+            },
+            register_suffix: 1,
+        }
+    }
+
 }
