@@ -249,3 +249,200 @@ macro_rules! impl_spi {
         }
     };
 }
+
+
+/// Implement traits for a SPI interface
+#[macro_export]
+macro_rules! impl2_spi {
+    (
+        $(#[$spi_attr:meta])*
+        pub struct $Spi:ident {
+            peripheral: $SPI:ty,
+            pins: {
+                sclk: $sclkmod:ident::$SCLK:ident,
+                mosi: $mosimod:ident::$MOSI:ident,
+                miso: $misomod:ident::$MISO:ident,
+            },
+            //register_suffix: $n:expr,
+        }
+    ) => {
+        $(#[$spi_attr])*
+        pub struct $Spi<MisoInputMode: $crate::port::mode::InputMode> {
+            peripheral: $SPI,
+            sclk: $sclkmod::$SCLK<$crate::port::mode::Output>,
+            mosi: $mosimod::$MOSI<$crate::port::mode::Output>,
+            miso: $misomod::$MISO<$crate::port::mode::Input<MisoInputMode>>,
+            settings: Settings,
+            is_write_in_progress: bool,
+        }
+
+        impl $Spi<$crate::port::mode::PullUp> {
+            /// Instantiate an SPI with the registers, SCLK/MOSI/MISO pins, and settings,
+            /// with the internal pull-up enabled on the MISO pin.
+            ///
+            /// The pins are not actually used directly, but they are moved into the struct in
+            /// order to enforce that they are in the correct mode, and cannot be used by anyone
+            /// else while SPI is active.
+            pub fn new(
+                peripheral: $SPI,
+                sclk: $sclkmod::$SCLK<$crate::port::mode::Output>,
+                mosi: $mosimod::$MOSI<$crate::port::mode::Output>,
+                miso: $misomod::$MISO<$crate::port::mode::Input<$crate::port::mode::PullUp>>,
+                settings: Settings
+            ) -> Self {
+                let spi = $Spi {
+                    peripheral,
+                    sclk,
+                    mosi,
+                    miso,
+                    settings,
+                    is_write_in_progress: false,
+                };
+                spi.setup();
+                spi
+            }
+        }
+
+        impl $Spi<$crate::port::mode::Floating> {
+            /// Instantiate an SPI with the registers, SCLK/MOSI/MISO pins, and settings,
+            /// with an external pull-up on the MISO pin.
+            ///
+            /// The pins are not actually used directly, but they are moved into the struct in
+            /// order to enforce that they are in the correct mode, and cannot be used by anyone
+            /// else while SPI is active.
+            pub fn with_external_pullup(
+                peripheral: $SPI,
+                sclk: $sclkmod::$SCLK<$crate::port::mode::Output>,
+                mosi: $mosimod::$MOSI<$crate::port::mode::Output>,
+                miso: $misomod::$MISO<$crate::port::mode::Input<$crate::port::mode::Floating>>,
+                settings: Settings
+            ) -> Self {
+                let spi = $Spi {
+                    peripheral,
+                    sclk,
+                    mosi,
+                    miso,
+                    settings,
+                    is_write_in_progress: false,
+                };
+                spi.setup();
+                spi
+            }
+        }
+
+        impl<MisoInputMode: $crate::port::mode::InputMode> $Spi<MisoInputMode> {
+
+            /// Disable the SPI device and release ownership of the peripheral
+            /// and pins.  Instance can no-longer be used after this is
+            /// invoked.
+            pub fn release(self) -> (
+                $SPI,
+                $sclkmod::$SCLK<$crate::port::mode::Output>,
+                $mosimod::$MOSI<$crate::port::mode::Output>,
+                $misomod::$MISO<$crate::port::mode::Input<MisoInputMode>>,
+            ) {
+                self.peripheral.spcr.write(|w| {
+                    w.spe().clear_bit()
+                });
+                (self.peripheral, self.sclk, self.mosi, self.miso)
+            }
+
+            /// Write a byte to the data register, which begins transmission
+            /// automatically.
+            fn write(&mut self, byte: u8) {
+                self.is_write_in_progress = true;
+                self.peripheral.spdr.write(|w| unsafe { w.bits(byte) });
+            }
+
+            /// Check if write flag is set, and return a WouldBlock error if it is not.
+            fn flush(&mut self) -> $crate::nb::Result<(), $crate::void::Void> {
+                if self.is_write_in_progress {
+                    if self.peripheral.spsr.read().spif().bit_is_set() {
+                        self.is_write_in_progress = false;
+                    } else {
+                        return Err($crate::nb::Error::WouldBlock);
+                    }
+                }
+                Ok(())
+            }
+
+            /// Sets up the control/status registers with the right settings for this secondary device
+            fn setup(&self) {
+                use $crate::hal::spi;
+
+                // set up control register
+                self.peripheral.spcr.write(|w| {
+                    // enable SPI
+                    w.spe().set_bit();
+                    // Set to primary mode
+                    w.mstr().set_bit();
+                    // set up data order control bit
+                    match self.settings.data_order {
+                        DataOrder::MostSignificantFirst => w.dord().clear_bit(),
+                        DataOrder::LeastSignificantFirst => w.dord().set_bit(),
+                    };
+                    // set up polarity control bit
+                    match self.settings.mode.polarity {
+                        spi::Polarity::IdleHigh => w.cpol().set_bit(),
+                        spi::Polarity::IdleLow => w.cpol().clear_bit(),
+                    };
+                    // set up phase control bit
+                    match self.settings.mode.phase {
+                        spi::Phase::CaptureOnFirstTransition => w.cpha().clear_bit(),
+                        spi::Phase::CaptureOnSecondTransition => w.cpha().set_bit(),
+                    };
+                    // set up clock rate control bit
+                    match self.settings.clock {
+                        SerialClockRate::OscfOver2 => w.spr().val_0x00(),
+                        SerialClockRate::OscfOver4 => w.spr().val_0x00(),
+                        SerialClockRate::OscfOver8 => w.spr().val_0x01(),
+                        SerialClockRate::OscfOver16 => w.spr().val_0x01(),
+                        SerialClockRate::OscfOver32 => w.spr().val_0x02(),
+                        SerialClockRate::OscfOver64 => w.spr().val_0x02(),
+                        SerialClockRate::OscfOver128 => w.spr().val_0x03(),
+                    }
+                });
+                // set up 2x clock rate status bit
+                self.peripheral.spsr.write(|w| match self.settings.clock {
+                    SerialClockRate::OscfOver2 => w.spi2x().set_bit(),
+                    SerialClockRate::OscfOver4 => w.spi2x().clear_bit(),
+                    SerialClockRate::OscfOver8 => w.spi2x().set_bit(),
+                    SerialClockRate::OscfOver16 => w.spi2x().clear_bit(),
+                    SerialClockRate::OscfOver32 => w.spi2x().set_bit(),
+                    SerialClockRate::OscfOver64 => w.spi2x().clear_bit(),
+                    SerialClockRate::OscfOver128 => w.spi2x().clear_bit(),
+                });
+            }
+        }
+
+        /// FullDuplex trait implementation, allowing this struct to be provided to
+        /// drivers that require it for operation.  Only 8-bit word size is supported
+        /// for now.
+        impl<MisoInputMode: $crate::port::mode::InputMode> $crate::hal::spi::FullDuplex<u8> for $Spi<MisoInputMode> {
+            type Error = $crate::void::Void;
+
+            /// Sets up the device for transmission and sends the data
+            fn send(&mut self, byte: u8) -> $crate::nb::Result<(), Self::Error> {
+                self.flush()?;
+                self.write(byte);
+                Ok(())
+            }
+
+            /// Reads and returns the response in the data register
+            fn read(&mut self) -> $crate::nb::Result<u8, Self::Error> {
+                self.flush()?;
+                Ok(self.peripheral.spdr.read().bits())
+            }
+        }
+
+        /// Default Trasmer trait implementation. Only 8-bit word size is supported for now.
+        impl<MisoInputMode: $crate::port::mode::InputMode> $crate::hal::blocking::spi::transfer::Default<u8> for $Spi<MisoInputMode>
+        {
+        }
+
+        /// Default Write trait implementation. Only 8-bit word size is supported for now.
+        impl<MisoInputMode: $crate::port::mode::InputMode> $crate::hal::blocking::spi::write::Default<u8> for $Spi<MisoInputMode>
+        {
+        }
+    }
+}
